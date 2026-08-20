@@ -535,8 +535,38 @@
     statusPill.textContent = 'Use HTTPS to test on iPhone';
   }
 
+  // A direct (STUN-only) path often fails once two devices are on different
+  // networks — e.g. one on cellular, one on Wi-Fi — because carrier NATs
+  // block the direct route. Adding TURN servers gives WebRTC a relay
+  // fallback: if a direct path can't be found, traffic routes through the
+  // relay instead, so the connection still succeeds.
+  var RTC_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
+      {
+        urls: 'turn:openrelay.metered.ca:80',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      }
+    ]
+  };
+
+  var CONNECT_TIMEOUT_MS = 15000;
+  var connectTimer = null;
+
   try{
-    peer = new Peer();
+    peer = new Peer(undefined, { config: RTC_CONFIG });
   }catch(e){
     statusPill.textContent = 'Could not start — try reloading';
   }
@@ -553,12 +583,14 @@
     peer.on('connection', function(c){
       if(conn && conn.open) { c.close(); return; }
       conn = c;
-      bindConnection();
+      bindConnection(c);
     });
 
     peer.on('error', function(err){
+      clearTimeout(connectTimer);
       var msg = 'Connection failed';
       if(err && err.type === 'peer-unavailable') msg = 'That ID is not online';
+      else if(err && err.type === 'network') msg = 'Network error — check your connection';
       setState('error', msg);
     });
 
@@ -643,6 +675,15 @@
     setState('connecting');
     conn = peer.connect(pid, { reliable: true });
     bindConnection(conn);
+
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(function(){
+      if(conn && !conn.open){
+        try{ conn.close(); }catch(e){}
+        conn = null;
+        setState('error', 'Could not reach that device — check the ID and that both tabs are open');
+      }
+    }, CONNECT_TIMEOUT_MS);
   });
 
   disconnectBtn.addEventListener('click', function(){
@@ -656,17 +697,20 @@
   function bindConnection(c){
     c.on('open', function(){
       if(conn !== c) return;
+      clearTimeout(connectTimer);
       setState('connected', c.peer);
     });
     c.on('data', handleData);
     c.on('close', function(){
       if(conn !== c) return;
+      clearTimeout(connectTimer);
       conn = null;
       setState('ready');
     });
     c.on('error', function(){
       if(conn !== c) return;
-      setState('error', 'Connection error');
+      clearTimeout(connectTimer);
+      setState('error', 'Connection error — try again');
     });
   }
 
