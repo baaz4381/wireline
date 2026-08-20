@@ -799,6 +799,33 @@
     setState('ready');
   });
 
+  // Mobile browsers pause JavaScript timers (and can stall WebRTC
+  // negotiation entirely) the moment a tab goes to the background — which
+  // happens constantly on phones: switching apps to read the ID, taking a
+  // screenshot, the screen locking. That silently breaks an in-progress
+  // connection attempt with no error shown. Detect the tab coming back to
+  // the foreground and, if we were mid-connect and never finished, restart
+  // the attempt fresh instead of leaving it stuck.
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden){
+      if(activeConnectId && linkPanel.classList.contains('state-connecting')){
+        clearTimeout(connectTimer);
+        statusPill.textContent = 'Paused — keep this tab open to finish connecting';
+      }
+      return;
+    }
+    if(peer && peer.disconnected){
+      try{ peer.reconnect(); }catch(e){}
+    }
+    if(activeConnectId && (!conn || !conn.open)){
+      var pid = activeConnectId;
+      try{ if(conn) conn.close(); }catch(e){}
+      conn = null;
+      connectAttempt = 0;
+      attemptConnect(pid);
+    }
+  });
+
   function bindConnection(c){
     c.on('open', function(){
       if(conn !== c) return;
