@@ -316,7 +316,7 @@
       <div class="node">
         <div class="node-label">Connect to</div>
         <div class="node-row">
-          <input type="text" id="partnerInput" placeholder="Paste partner's ID" autocomplete="off" spellcheck="false">
+          <input type="text" id="partnerInput" placeholder="6-character ID" autocomplete="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:.08em;">
         </div>
         <div class="node-row">
           <button class="btn primary" id="connectBtn">Connect</button>
@@ -497,7 +497,7 @@
     linkPanel.classList.remove('state-connecting','state-connected');
     if(state === 'connecting'){
       linkPanel.classList.add('state-connecting');
-      statusPill.textContent = 'Connecting…';
+      statusPill.textContent = detail || 'Connecting…';
       connectBtn.disabled = true;
     } else if(state === 'connected'){
       linkPanel.classList.add('state-connected');
@@ -550,6 +550,11 @@
         credential: 'openrelayproject'
       },
       {
+        urls: 'turn:openrelay.metered.ca:80?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
         urls: 'turn:openrelay.metered.ca:443',
         username: 'openrelayproject',
         credential: 'openrelayproject'
@@ -562,32 +567,76 @@
     ]
   };
 
-  var CONNECT_TIMEOUT_MS = 15000;
+  // Relay negotiation (allocating a TURN session, then pairing candidates)
+  // takes noticeably longer than a direct path, especially on the first
+  // attempt of a session. Give it real time before calling it failed, and
+  // retry automatically rather than surfacing one failure as final.
+  var CONNECT_TIMEOUT_MS = 12000;
+  var MAX_CONNECT_ATTEMPTS = 4;
   var connectTimer = null;
+  var connectAttempt = 0;
+  var activeConnectId = null;
+  var idCollisionAttempts = 0;
+  var pendingConnectId = null; // set when we need to reconnect to the broker before connecting
 
-  try{
-    peer = new Peer(undefined, { config: RTC_CONFIG });
-  }catch(e){
-    statusPill.textContent = 'Could not start — try reloading';
+  // Short, easy-to-type IDs: 6 characters, uppercase letters and digits only.
+  function makeShortId(){
+    var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid mixups
+    var s = '';
+    for(var i = 0; i < 6; i++){
+      s += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return s;
   }
 
-  if(peer){
+  function createPeer(){
+    var id = makeShortId();
+    try{
+      peer = new Peer(id, { config: RTC_CONFIG });
+    }catch(e){
+      statusPill.textContent = 'Could not start — try reloading';
+      return;
+    }
+    attachPeerHandlers();
+  }
+
+  function attachPeerHandlers(){
     peer.on('open', function(id){
       myId = id;
       myIdEl.textContent = id;
       myIdEl.classList.remove('pending');
+      idCollisionAttempts = 0;
       setState('ready');
       renderQR(id);
+
+      if(pendingConnectId){
+        var pid = pendingConnectId;
+        pendingConnectId = null;
+        startConnect(pid);
+      }
     });
 
     peer.on('connection', function(c){
-      if(conn && conn.open) { c.close(); return; }
+      if(conn && conn.open){ c.close(); return; }
+      // Glare: we were mid-way through our own outgoing attempt when a
+      // matching incoming one arrived. Drop our half-open attempt and take
+      // the incoming one — it's further along and more likely to succeed.
+      if(conn && !conn.open){
+        try{ conn.close(); }catch(e){}
+      }
+      clearTimeout(connectTimer);
       conn = c;
       bindConnection(c);
     });
 
     peer.on('error', function(err){
       clearTimeout(connectTimer);
+      if(err && err.type === 'unavailable-id' && idCollisionAttempts < 5){
+        idCollisionAttempts++;
+        try{ peer.destroy(); }catch(e){}
+        createPeer();
+        return;
+      }
       var msg = 'Connection failed';
       if(err && err.type === 'peer-unavailable') msg = 'That ID is not online';
       else if(err && err.type === 'network') msg = 'Network error — check your connection';
@@ -595,7 +644,11 @@
     });
 
     peer.on('disconnected', function(){
-      setState('error', 'Signal lost — reconnecting…');
+      // The socket to the signalling broker dropped (not the P2P link
+      // itself). Reconnect it in the background; 'open' fires again once
+      // it's back, at which point any pending connect attempt resumes.
+      myIdEl.classList.add('pending');
+      statusPill.textContent = 'Signal lost — reconnecting…';
       try{
         peer.reconnect();
       }catch(e){
@@ -603,6 +656,8 @@
       }
     });
   }
+
+  createPeer();
 
   function renderQR(id){
     qrbox.innerHTML = '';
@@ -653,7 +708,7 @@
   function handleJoinHash(){
     var hash = window.location.hash || '';
     if(hash.indexOf('#connect=') !== 0) return;
-    var id = decodeURIComponent(hash.slice('#connect='.length));
+    var id = decodeURIComponent(hash.slice('#connect='.length)).toUpperCase();
     if(!id) return;
     partnerInput.value = id;
     try{
@@ -664,29 +719,79 @@
 
   handleJoinHash();
 
+  // Keep the field to exactly what a valid ID can be: 6 characters,
+  // uppercase letters and digits only.
+  partnerInput.setAttribute('maxlength', '6');
+  partnerInput.addEventListener('input', function(){
+    var clean = partnerInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
+    if(clean !== partnerInput.value) partnerInput.value = clean;
+  });
+
+  function startConnect(pid){
+    if(!peer) return;
+    activeConnectId = pid;
+    connectAttempt = 0;
+    if(peer.disconnected){
+      // Broker socket isn't up — queue this connect for when it reopens.
+      pendingConnectId = pid;
+      setState('connecting', 'Reconnecting to signal…');
+      try{ peer.reconnect(); }catch(e){}
+      return;
+    }
+    attemptConnect(pid);
+  }
+
+  function attemptConnect(pid){
+    if(!peer || activeConnectId !== pid) return;
+    connectAttempt++;
+
+    if(conn && conn.open){
+      try{ conn.close(); }catch(e){}
+    }
+
+    var label = connectAttempt > 1
+      ? 'Connecting… (attempt ' + connectAttempt + ' of ' + MAX_CONNECT_ATTEMPTS + ')'
+      : 'Connecting…';
+    setState('connecting', label);
+
+    var thisConn = peer.connect(pid, { reliable: true });
+    conn = thisConn;
+    bindConnection(thisConn);
+
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(function(){
+      if(activeConnectId !== pid) return;
+      if(conn === thisConn && !thisConn.open){
+        try{ thisConn.close(); }catch(e){}
+        if(conn === thisConn) conn = null;
+
+        if(connectAttempt < MAX_CONNECT_ATTEMPTS){
+          // A relay path can legitimately take a few seconds longer than a
+          // direct one to finish negotiating — retry with a fresh attempt
+          // rather than giving up on the first slow try.
+          setState('connecting', 'Still trying — relaying through a backup route…');
+          attemptConnect(pid);
+        } else {
+          activeConnectId = null;
+          setState('error', 'Could not connect after several tries — check the ID, or try a different network');
+        }
+      }
+    }, CONNECT_TIMEOUT_MS);
+  }
+
   connectBtn.addEventListener('click', function(){
-    var pid = partnerInput.value.trim();
-    if(!pid || !peer) return;
+    var pid = partnerInput.value.trim().toUpperCase();
+    if(!pid || pid.length !== 6 || !peer) return;
     if(myId && pid === myId){
       setState('error', 'You cannot connect to yourself');
       return;
     }
-    if(conn && conn.open) conn.close();
-    setState('connecting');
-    conn = peer.connect(pid, { reliable: true });
-    bindConnection(conn);
-
-    clearTimeout(connectTimer);
-    connectTimer = setTimeout(function(){
-      if(conn && !conn.open){
-        try{ conn.close(); }catch(e){}
-        conn = null;
-        setState('error', 'Could not reach that device — check the ID and that both tabs are open');
-      }
-    }, CONNECT_TIMEOUT_MS);
+    startConnect(pid);
   });
 
   disconnectBtn.addEventListener('click', function(){
+    clearTimeout(connectTimer);
+    activeConnectId = null;
     if(conn){
       try{ conn.close(); }catch(e){}
     }
@@ -698,6 +803,7 @@
     c.on('open', function(){
       if(conn !== c) return;
       clearTimeout(connectTimer);
+      activeConnectId = null;
       setState('connected', c.peer);
     });
     c.on('data', handleData);
@@ -705,12 +811,21 @@
       if(conn !== c) return;
       clearTimeout(connectTimer);
       conn = null;
+      activeConnectId = null;
       setState('ready');
     });
     c.on('error', function(){
       if(conn !== c) return;
       clearTimeout(connectTimer);
-      setState('error', 'Connection error — try again');
+      // Let the retry loop in attemptConnect handle this rather than
+      // surfacing a hard failure on the first hiccup.
+      if(activeConnectId && connectAttempt < MAX_CONNECT_ATTEMPTS){
+        conn = null;
+        attemptConnect(activeConnectId);
+      } else {
+        activeConnectId = null;
+        setState('error', 'Connection error — try again');
+      }
     });
   }
 
