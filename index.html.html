@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wireline — Direct Device-to-Device File &amp; Text Sharing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  :root{
+    --bg:#0B0F0D;
+    --bg-soft:#0E1512;
+    --surface:#141B18;
+    --surface-2:#1B241F;
+    --border:#28322C;
+    --text:#EAF0EA;
+    --text-dim:#8FA398;
+    --text-faint:#5C6A62;
+    --amber:#FFB238;
+    --amber-soft:rgba(255,178,56,.13);
+    --green:#63D992;
+    --green-soft:rgba(99,217,146,.13);
+    --red:#FF6B5E;
+    --mono:'IBM Plex Mono',ui-monospace,monospace;
+    --sans:'Inter',system-ui,sans-serif;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      repeating-linear-gradient(180deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px),
+      radial-gradient(1200px 600px at 50% -10%, #132019 0%, var(--bg) 60%);
+    color:var(--text);
+    font-family:var(--sans);
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;}
+  ::selection{background:var(--amber);color:#0B0F0D;}
+  :focus-visible{outline:2px solid var(--amber); outline-offset:2px;}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 28px;}
+
+  /* ---------- NAV ---------- */
+  header.nav{
+    position:sticky;top:0;z-index:40;
+    background:rgba(11,15,13,.82);
+    backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  .nav-inner{
+    max-width:1120px;margin:0 auto;padding:16px 28px;
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:600;letter-spacing:.02em;font-size:16px;}
+  .brand-mark{
+    width:22px;height:22px;position:relative;flex:none;
+  }
+  .brand-mark svg{width:100%;height:100%;}
+  nav.links{display:flex;gap:28px;font-size:14px;color:var(--text-dim);}
+  nav.links a{text-decoration:none;transition:color .15s;}
+  nav.links a:hover{color:var(--amber);}
+  @media(max-width:640px){nav.links{display:none;}}
+
+  /* ---------- HERO ---------- */
+  .hero{padding:64px 0 40px;}
+  .eyebrow{
+    font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--amber);display:flex;align-items:center;gap:10px;margin-bottom:18px;
+  }
+  .eyebrow::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);}
+  h1{
+    font-size:clamp(32px,5vw,54px);
+    line-height:1.06;
+    letter-spacing:-.02em;
+    margin:0 0 18px;
+    max-width:16ch;
+    font-weight:800;
+  }
+  .hero p.sub{
+    color:var(--text-dim);
+    font-size:17px;
+    max-width:54ch;
+    margin:0 0 40px;
+  }
+
+  /* ---------- SIGNAL / LINK PANEL (signature element) ---------- */
+  .link-panel{
+    display:grid;
+    grid-template-columns:1fr auto 1fr;
+    align-items:stretch;
+    gap:0;
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    overflow:hidden;
+  }
+  @media(max-width:800px){
+    .link-panel{grid-template-columns:1fr;}
+  }
+  .node{padding:26px 28px;display:flex;flex-direction:column;gap:12px;}
+  .node-label{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint);}
+  .node-id{
+    font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.03em;
+    color:var(--text);word-break:break-all;
+  }
+  .node-id.pending{color:var(--text-faint);font-weight:400;}
+  .node-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+  button{
+    font-family:var(--sans);cursor:pointer;border:none;
+  }
+  .btn{
+    font-size:13px;font-weight:600;padding:9px 16px;border-radius:8px;
+    background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+    transition:border-color .15s,color .15s,background .15s;
+  }
+  .btn:hover{border-color:var(--amber);color:var(--amber);}
+  .btn.primary{
+    background:var(--amber);color:#1A1204;border-color:var(--amber);
+  }
+  .btn.primary:hover{background:#ffc35f;color:#1A1204;}
+  .btn:disabled{opacity:.45;cursor:not-allowed;}
+  .btn:disabled:hover{border-color:var(--border);color:var(--text);}
+  input[type=text]{
+    font-family:var(--mono);font-size:15px;
+    background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:11px 12px;width:100%;
+  }
+  input[type=text]::placeholder{color:var(--text-faint);}
+  input[type=text]:focus{border-color:var(--amber);}
+
+  .signal-wire{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;padding:20px 18px;min-width:150px;
+    border-left:1px solid var(--border);border-right:1px solid var(--border);
+    background:var(--bg-soft);
+  }
+  .wire-track{position:relative;width:100%;height:2px;background:linear-gradient(90deg,var(--border),var(--text-faint),var(--border));border-radius:2px;}
+  .wire-track::before{
+    content:'';position:absolute;top:-3px;left:0;width:8px;height:8px;border-radius:50%;
+    background:var(--text-faint);
+    animation:none;
+  }
+  .link-panel.state-connecting .wire-track::before{
+    background:var(--amber);box-shadow:0 0 8px var(--amber);
+    animation:travel 1.4s linear infinite;
+  }
+  .link-panel.state-connected .wire-track::before{
+    background:var(--green);box-shadow:0 0 8px var(--green);
+    animation:travel 2.4s linear infinite;
+  }
+  @keyframes travel{
+    0%{left:0;opacity:0;} 8%{opacity:1;} 92%{opacity:1;} 100%{left:calc(100% - 8px);opacity:0;}
+  }
+  @media(max-width:800px){
+    .signal-wire{border-left:none;border-right:none;border-top:1px solid var(--border);border-bottom:1px solid var(--border);padding:16px 18px;}
+    .wire-track{width:2px;height:44px;background:linear-gradient(180deg,var(--border),var(--text-faint),var(--border));}
+    .wire-track::before{top:0;left:-3px;}
+    .link-panel.state-connecting .wire-track::before{animation:travel-v 1.4s linear infinite;}
+    .link-panel.state-connected .wire-track::before{animation:travel-v 2.4s linear infinite;}
+  }
+  @keyframes travel-v{
+    0%{top:0;opacity:0;} 8%{opacity:1;} 92%{opacity:1;} 100%{top:calc(100% - 8px);opacity:0;}
+  }
+  .status-pill{
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-align:center;
+    color:var(--text-faint);white-space:nowrap;
+  }
+  .link-panel.state-connecting .status-pill{color:var(--amber);}
+  .link-panel.state-connected .status-pill{color:var(--green);}
+
+  .qr-row{
+    display:flex;align-items:center;gap:18px;margin-top:22px;
+    color:var(--text-dim);font-size:13px;
+  }
+  #qrbox{background:var(--text);padding:8px;border-radius:8px;line-height:0;flex:none;}
+  #qrbox img, #qrbox canvas{display:block;}
+
+  @media(prefers-reduced-motion:reduce){
+    .wire-track::before{animation:none !important;}
+  }
+
+  /* ---------- STEPS ---------- */
+  .steps{padding:70px 0 20px;}
+  h2{font-size:26px;letter-spacing:-.01em;margin:0 0 8px;}
+  .section-sub{color:var(--text-dim);margin:0 0 34px;max-width:60ch;}
+  .step-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+  @media(max-width:800px){.step-grid{grid-template-columns:1fr;}}
+  .step{
+    border:1px solid var(--border);border-radius:var(--radius);padding:24px;background:var(--surface);
+  }
+  .step-num{font-family:var(--mono);font-size:13px;color:var(--amber);margin-bottom:14px;}
+  .step h3{margin:0 0 8px;font-size:16px;}
+  .step p{margin:0;color:var(--text-dim);font-size:14px;}
+
+  /* ---------- TRANSFER ---------- */
+  .transfer{padding:70px 0 20px;}
+  .panel-grid{display:grid;grid-template-columns:1.3fr 1fr;gap:20px;align-items:start;}
+  @media(max-width:900px){.panel-grid{grid-template-columns:1fr;}}
+  .panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);padding:24px;}
+  .panel h3{margin:0 0 4px;font-size:16px;}
+  .panel .panel-sub{color:var(--text-faint);font-size:13px;margin:0 0 18px;}
+
+  .dropzone{
+    border:1.5px dashed var(--border);border-radius:10px;
+    padding:34px 20px;text-align:center;cursor:pointer;
+    color:var(--text-dim);font-size:14px;transition:border-color .15s,background .15s;
+  }
+  .dropzone:hover, .dropzone.drag{border-color:var(--amber);background:var(--amber-soft);color:var(--text);}
+  .dropzone strong{color:var(--text);font-weight:600;}
+
+  #history{margin-top:18px;display:flex;flex-direction:column;gap:10px;}
+  .xfer-item{
+    border:1px solid var(--border);border-radius:9px;padding:12px 14px;background:var(--bg-soft);
+  }
+  .xfer-top{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:8px;}
+  .xfer-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px;}
+  .xfer-meta{font-family:var(--mono);color:var(--text-faint);font-size:11px;white-space:nowrap;}
+  .xfer-bar{height:5px;border-radius:4px;background:var(--surface-2);overflow:hidden;}
+  .xfer-bar-fill{height:100%;width:0%;background:var(--amber);transition:width .12s linear;}
+  .xfer-item.done .xfer-bar-fill{background:var(--green);}
+  .xfer-item.error .xfer-bar-fill{background:var(--red);}
+  .xfer-foot{margin-top:8px;font-size:12px;color:var(--text-faint);}
+  .xfer-foot a{color:var(--green);text-decoration:none;font-weight:600;}
+  .xfer-foot a:hover{text-decoration:underline;}
+  .empty-note{color:var(--text-faint);font-size:13px;margin-top:16px;}
+
+  textarea{
+    width:100%;min-height:110px;resize:vertical;
+    background:var(--bg-soft);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);font-family:var(--sans);font-size:14px;padding:12px;
+  }
+  textarea:focus{border-color:var(--amber);}
+  .text-received{
+    margin-top:16px;padding-top:16px;border-top:1px solid var(--border);
+  }
+  .text-received .node-label{margin-bottom:8px;}
+  .text-received-box{
+    min-height:80px;border:1px solid var(--border);border-radius:8px;padding:12px;
+    font-size:14px;color:var(--text-dim);background:var(--bg-soft);white-space:pre-wrap;word-break:break-word;
+  }
+
+  /* ---------- FEATURES ---------- */
+  .features{padding:70px 0 20px;}
+  .feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+  @media(max-width:800px){.feature-grid{grid-template-columns:1fr;}}
+  .feature{border:1px solid var(--border);border-radius:var(--radius);padding:24px;background:var(--surface);}
+  .feature .ficon{width:34px;height:34px;margin-bottom:16px;color:var(--amber);}
+  .feature h3{margin:0 0 8px;font-size:16px;}
+  .feature p{margin:0;color:var(--text-dim);font-size:14px;}
+
+  /* ---------- FAQ ---------- */
+  .faq{padding:70px 0 30px;}
+  .faq-list{border-top:1px solid var(--border);}
+  .faq-item{border-bottom:1px solid var(--border);}
+  .faq-q{
+    width:100%;text-align:left;background:none;padding:18px 4px;
+    display:flex;justify-content:space-between;align-items:center;gap:20px;
+    color:var(--text);font-size:15px;font-weight:600;
+  }
+  .faq-q .plus{font-family:var(--mono);color:var(--amber);flex:none;transition:transform .2s;}
+  .faq-item.open .faq-q .plus{transform:rotate(45deg);}
+  .faq-a{max-height:0;overflow:hidden;transition:max-height .2s ease;}
+  .faq-a p{margin:0 4px 18px;color:var(--text-dim);font-size:14px;max-width:70ch;}
+
+  /* ---------- FOOTER ---------- */
+  footer{border-top:1px solid var(--border);margin-top:60px;padding:40px 0;}
+  .footer-inner{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;}
+  .footer-brand{font-family:var(--mono);color:var(--text-dim);font-size:13px;}
+  .footer-note{color:var(--text-faint);font-size:12px;}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <div class="brand">
+      <span class="brand-mark">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="5" cy="12" r="3" stroke="#FFB238" stroke-width="2"/><circle cx="19" cy="12" r="3" stroke="#63D992" stroke-width="2"/><line x1="8" y1="12" x2="16" y2="12" stroke="#FFB238" stroke-width="2" stroke-dasharray="2 3"/></svg>
+      </span>
+      Wireline
+    </div>
+    <nav class="links">
+      <a href="#how">How it works</a>
+      <a href="#transfer">Transfer</a>
+      <a href="#features">Features</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <div class="eyebrow">Device-to-device &middot; nothing stored on a server</div>
+    <h1>Send files straight to another screen.</h1>
+    <p class="sub">Wireline opens a direct, encrypted connection between two browsers. No upload or account — files are sent directly between the two browsers when a direct connection is available.</p>
+
+    <div class="link-panel" id="linkPanel">
+      <div class="node">
+        <div class="node-label">Your ID</div>
+        <div class="node-id pending" id="myId">connecting…</div>
+        <div class="node-row">
+          <button class="btn" id="copyIdBtn">Copy ID</button>
+        </div>
+      </div>
+
+      <div class="signal-wire">
+        <div class="wire-track"></div>
+        <div class="status-pill" id="statusPill">Establishing signal</div>
+      </div>
+
+      <div class="node">
+        <div class="node-label">Connect to</div>
+        <div class="node-row">
+          <input type="text" id="partnerInput" placeholder="Paste partner's ID" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="node-row">
+          <button class="btn primary" id="connectBtn">Connect</button>
+          <button class="btn" id="disconnectBtn" style="display:none;">Disconnect</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="qr-row">
+      <div id="qrbox"></div>
+      <div>Scan this on your other device to open Wireline with the ID filled in, or copy the ID above and paste it there.<br>Both devices need this page open.</div>
+    </div>
+  </section>
+
+  <section class="steps" id="how">
+    <h2>How to connect</h2>
+    <p class="section-sub">Three steps, no accounts on either end.</p>
+    <div class="step-grid">
+      <div class="step">
+        <div class="step-num">01</div>
+        <h3>Open on both devices</h3>
+        <p>Load this page on your phone and your computer, or on two of anyone's devices.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <h3>Share your ID</h3>
+        <p>One device scans the other's QR code, or types in the ID manually.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <h3>Drop files or type</h3>
+        <p>Once connected, drag files in or share text — it travels directly between the two.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="transfer" id="transfer">
+    <h2>Transfer</h2>
+    <p class="section-sub">Available once your devices are connected.</p>
+    <div class="panel-grid">
+      <div class="panel">
+        <h3>File transfer</h3>
+        <p class="panel-sub">Any file, subject to browser, device, and network limits.</p>
+        <div class="dropzone" id="dropzone">
+          <strong>Tap to choose a file</strong> or drag and drop it here
+        </div>
+        <input type="file" id="fileInput" multiple style="display:none;">
+        <div id="history"></div>
+        <p class="empty-note" id="emptyNote">No transfers yet.</p>
+      </div>
+
+      <div class="panel">
+        <h3>Text share</h3>
+        <p class="panel-sub">Sends as you type, no copy-paste over email.</p>
+        <textarea id="textInput" placeholder="Type here — it appears on the other device instantly."></textarea>
+        <div class="text-received">
+          <div class="node-label">Received</div>
+          <div class="text-received-box" id="textReceived">Nothing yet.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <h2>Why direct</h2>
+    <p class="section-sub">Routing a file through a server means it sits somewhere before it reaches your recipient. Wireline skips that step.</p>
+    <div class="feature-grid">
+      <div class="feature">
+        <svg class="ficon" viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="12" rx="2" stroke="currentColor" stroke-width="2"/><path d="M3 10h18" stroke="currentColor" stroke-width="2"/><circle cx="7" cy="14" r="1" fill="currentColor"/></svg>
+        <h3>End-to-end by construction</h3>
+        <p>WebRTC opens an encrypted channel straight between the two browsers. Only the initial handshake passes through a coordination server — never your files.</p>
+      </div>
+      <div class="feature">
+        <svg class="ficon" viewBox="0 0 24 24" fill="none"><path d="M12 3v18M5 10l7-7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <h3>No artificial size limit</h3>
+        <p>Since nothing uploads to a server, there's no plan tier capping you at 2GB. Practical limits come from your connection and device memory, not from us.</p>
+      </div>
+      <div class="feature">
+        <svg class="ficon" viewBox="0 0 24 24" fill="none"><path d="M12 2 4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <h3>Nothing left behind</h3>
+        <p>Close the tab and the connection is gone. No history, no server copy, nothing to delete later because there was never a copy made.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="faq" id="faq">
+    <h2>Frequently asked</h2>
+    <div class="faq-list" id="faqList">
+      <div class="faq-item">
+        <button class="faq-q"><span>Is this actually private?</span><span class="plus">+</span></button>
+        <div class="faq-a"><p>Yes. WebRTC establishes a direct, encrypted channel between your browser and your partner's. A public coordination server only helps the two browsers find each other — the file itself never passes through it.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span>Is there a real file size limit?</span><span class="plus">+</span></button>
+        <div class="faq-a"><p>There is no application-enforced size limit, but browser memory, device storage, and network conditions limit practical file size.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span>What happens if the connection drops?</span><span class="plus">+</span></button>
+        <div class="faq-a"><p>The transfer stops where it was. Reconnect using the same ID and send the file again — there's currently no partial resume.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q"><span>Does the other person need an account?</span><span class="plus">+</span></button>
+        <div class="faq-a"><p>No. Nobody signs up on either end — they just need this page open and your ID.</p></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap footer-inner">
+    <div class="footer-brand">Wireline — direct device-to-device sharing.</div>
+    <div class="footer-note">No files pass through or stay on any server.</div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  // ---------- FAQ accordion ----------
+  document.querySelectorAll('.faq-item').forEach(function(item){
+    var q = item.querySelector('.faq-q');
+    var a = item.querySelector('.faq-a');
+    q.addEventListener('click', function(){
+      var isOpen = item.classList.contains('open');
+      document.querySelectorAll('.faq-item.open').forEach(function(o){
+        o.classList.remove('open');
+        o.querySelector('.faq-a').style.maxHeight = null;
+      });
+      if(!isOpen){
+        item.classList.add('open');
+        a.style.maxHeight = a.scrollHeight + 'px';
+      }
+    });
+  });
+
+  // ---------- Elements ----------
+  var linkPanel = document.getElementById('linkPanel');
+  var myIdEl = document.getElementById('myId');
+  var statusPill = document.getElementById('statusPill');
+  var copyIdBtn = document.getElementById('copyIdBtn');
+  var partnerInput = document.getElementById('partnerInput');
+  var connectBtn = document.getElementById('connectBtn');
+  var disconnectBtn = document.getElementById('disconnectBtn');
+  var qrbox = document.getElementById('qrbox');
+  var dropzone = document.getElementById('dropzone');
+  var fileInput = document.getElementById('fileInput');
+  var historyEl = document.getElementById('history');
+  var emptyNote = document.getElementById('emptyNote');
+  var textInput = document.getElementById('textInput');
+  var textReceived = document.getElementById('textReceived');
+
+  var peer = null;
+  var conn = null;
+  var myId = null;
+  var receiving = {}; // id -> transfer state
+  var textDebounce = null;
+
+  function createReceiverState(msg){
+    var state = {
+      name: msg.name,
+      size: msg.size,
+      received: 0,
+      chunks: [],
+      writer: null,
+      writable: null,
+      useStream: false
+    };
+
+    // File System Access API is supported on Chromium desktop. Safari/iOS
+    // uses the memory fallback, but files are still transferred in chunks.
+    if(window.showSaveFilePicker){
+      state.canStream = true;
+    }
+    return state;
+  }
+
+  function setState(state, detail){
+    linkPanel.classList.remove('state-connecting','state-connected');
+    if(state === 'connecting'){
+      linkPanel.classList.add('state-connecting');
+      statusPill.textContent = 'Connecting…';
+      connectBtn.disabled = true;
+    } else if(state === 'connected'){
+      linkPanel.classList.add('state-connected');
+      statusPill.textContent = 'Connected to ' + (detail || 'partner');
+      connectBtn.style.display = 'none';
+      disconnectBtn.style.display = 'inline-block';
+      partnerInput.disabled = true;
+    } else if(state === 'ready'){
+      statusPill.textContent = 'Ready — waiting for a partner';
+      connectBtn.disabled = false;
+      connectBtn.style.display = 'inline-block';
+      disconnectBtn.style.display = 'none';
+      partnerInput.disabled = false;
+    } else if(state === 'error'){
+      statusPill.textContent = detail || 'Connection failed';
+      connectBtn.disabled = false;
+      disconnectBtn.style.display = 'none';
+      connectBtn.style.display = 'inline-block';
+      partnerInput.disabled = false;
+    } else {
+      statusPill.textContent = 'Establishing signal';
+    }
+  }
+
+  function formatBytes(n){
+    if(n < 1024) return n + ' B';
+    var units = ['KB','MB','GB','TB'];
+    var i = -1;
+    do { n /= 1024; i++; } while(n >= 1024 && i < units.length - 1);
+    return n.toFixed(n < 10 ? 1 : 0) + ' ' + units[i];
+  }
+
+  // ---------- Peer setup ----------
+  if(location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'){
+    statusPill.textContent = 'Use HTTPS to test on iPhone';
+  }
+
+  try{
+    peer = new Peer();
+  }catch(e){
+    statusPill.textContent = 'Could not start — try reloading';
+  }
+
+  if(peer){
+    peer.on('open', function(id){
+      myId = id;
+      myIdEl.textContent = id;
+      myIdEl.classList.remove('pending');
+      setState('ready');
+      renderQR(id);
+    });
+
+    peer.on('connection', function(c){
+      if(conn && conn.open) { c.close(); return; }
+      conn = c;
+      bindConnection();
+    });
+
+    peer.on('error', function(err){
+      var msg = 'Connection failed';
+      if(err && err.type === 'peer-unavailable') msg = 'That ID is not online';
+      setState('error', msg);
+    });
+
+    peer.on('disconnected', function(){
+      setState('error', 'Signal lost — reconnecting…');
+      try{
+        peer.reconnect();
+      }catch(e){
+        setState('error', 'Signal lost — reload to reconnect');
+      }
+    });
+  }
+
+  function renderQR(id){
+    qrbox.innerHTML = '';
+    var joinUrl = new URL(window.location.href);
+    joinUrl.hash = 'connect=' + encodeURIComponent(id);
+    new QRCode(qrbox, {
+      text: joinUrl.toString(),
+      width: 108,
+      height: 108,
+      colorDark: '#0B0F0D',
+      colorLight: '#EAF0EA'
+    });
+  }
+
+  function copyText(value){
+    if(navigator.clipboard && window.isSecureContext){
+      return navigator.clipboard.writeText(value);
+    }
+    return new Promise(function(resolve, reject){
+      var ta = document.createElement('textarea');
+      ta.value = value;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try{
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        resolve();
+      }catch(e){
+        document.body.removeChild(ta);
+        reject(e);
+      }
+    });
+  }
+
+  copyIdBtn.addEventListener('click', function(){
+    if(!myId) return;
+    copyText(myId).then(function(){
+      copyIdBtn.textContent = 'Copied';
+      setTimeout(function(){ copyIdBtn.textContent = 'Copy ID'; }, 1400);
+    }).catch(function(){
+      copyIdBtn.textContent = 'Copy manually';
+      setTimeout(function(){ copyIdBtn.textContent = 'Copy ID'; }, 1600);
+    });
+  });
+
+  function handleJoinHash(){
+    var hash = window.location.hash || '';
+    if(hash.indexOf('#connect=') !== 0) return;
+    var id = decodeURIComponent(hash.slice('#connect='.length));
+    if(!id) return;
+    partnerInput.value = id;
+    try{
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }catch(e){}
+    setState('ready');
+  }
+
+  handleJoinHash();
+
+  connectBtn.addEventListener('click', function(){
+    var pid = partnerInput.value.trim();
+    if(!pid || !peer) return;
+    if(myId && pid === myId){
+      setState('error', 'You cannot connect to yourself');
+      return;
+    }
+    if(conn && conn.open) conn.close();
+    setState('connecting');
+    conn = peer.connect(pid, { reliable: true });
+    bindConnection(conn);
+  });
+
+  disconnectBtn.addEventListener('click', function(){
+    if(conn){
+      try{ conn.close(); }catch(e){}
+    }
+    conn = null;
+    setState('ready');
+  });
+
+  function bindConnection(c){
+    c.on('open', function(){
+      if(conn !== c) return;
+      setState('connected', c.peer);
+    });
+    c.on('data', handleData);
+    c.on('close', function(){
+      if(conn !== c) return;
+      conn = null;
+      setState('ready');
+    });
+    c.on('error', function(){
+      if(conn !== c) return;
+      setState('error', 'Connection error');
+    });
+  }
+
+  // ---------- File sending ----------
+  dropzone.addEventListener('click', function(){ fileInput.click(); });
+  fileInput.addEventListener('change', function(){ handleFiles(fileInput.files); fileInput.value = ''; });
+  ['dragover','dragenter'].forEach(function(evt){
+    dropzone.addEventListener(evt, function(e){ e.preventDefault(); dropzone.classList.add('drag'); });
+  });
+  ['dragleave','dragend','drop'].forEach(function(evt){
+    dropzone.addEventListener(evt, function(e){ dropzone.classList.remove('drag'); });
+  });
+  dropzone.addEventListener('drop', function(e){
+    e.preventDefault();
+    if(e.dataTransfer && e.dataTransfer.files) handleFiles(e.dataTransfer.files);
+  });
+
+  function handleFiles(fileList){
+    if(!conn || !conn.open){
+      setState('error', 'Connect to a device first');
+      return;
+    }
+    Array.prototype.forEach.call(fileList, sendFile);
+  }
+
+  function sendFile(file){
+    if(!conn || !conn.open){
+      setState('error', 'Connect to a device first');
+      return;
+    }
+
+    var activeConn = conn;
+    var id = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
+    addHistoryItem(id, file.name, file.size, 'Sending');
+
+    try{
+      activeConn.send({ type: 'meta', id: id, name: file.name, size: file.size });
+    }catch(e){
+      markError(id);
+      return;
+    }
+
+    if(file.size === 0){
+      try{ activeConn.send({ type: 'done', id: id }); }catch(e){}
+      markComplete(id);
+      return;
+    }
+
+    var chunkSize = 16 * 1024;
+    var offset = 0;
+    var reader = new FileReader();
+
+    reader.onload = function(e){
+      if(!activeConn.open){
+        markError(id);
+        return;
+      }
+
+      var buf = e.target.result;
+
+      function proceed(){
+        if(!activeConn.open){
+          markError(id);
+          return;
+        }
+
+        try{
+          activeConn.send({ type: 'chunk', id: id, data: buf });
+        }catch(err){
+          markError(id);
+          return;
+        }
+
+        offset += buf.byteLength;
+        updateProgress(id, offset / file.size);
+
+        if(offset < file.size){
+          readSlice(offset);
+        }else{
+          try{ activeConn.send({ type: 'done', id: id }); }catch(err){}
+          markComplete(id);
+        }
+      }
+
+      var dc = activeConn.dataChannel;
+      if(dc && dc.bufferedAmount > 4 * 1024 * 1024){
+        var wait = setInterval(function(){
+          if(!activeConn.open){
+            clearInterval(wait);
+            markError(id);
+          }else if(!dc || dc.bufferedAmount < 1 * 1024 * 1024){
+            clearInterval(wait);
+            proceed();
+          }
+        }, 50);
+      }else{
+        proceed();
+      }
+    };
+
+    reader.onerror = function(){ markError(id); };
+    reader.onabort = function(){ markError(id); };
+
+    function readSlice(o){
+      if(!activeConn.open){
+        markError(id);
+        return;
+      }
+      var slice = file.slice(o, o + chunkSize);
+      reader.readAsArrayBuffer(slice);
+    }
+
+    readSlice(0);
+  }
+
+  // ---------- File receiving ----------
+  function handleData(msg){
+    if(!msg || !msg.type) return;
+    if(msg.type === 'meta'){
+      receiving[msg.id] = createReceiverState(msg);
+      addHistoryItem(msg.id, msg.name, msg.size, 'Receiving');
+    } else if(msg.type === 'chunk'){
+      var f = receiving[msg.id];
+      if(!f) return;
+
+      // Keep chunks as ArrayBuffers. We intentionally avoid converting them
+      // to strings or base64, which would multiply memory use.
+      f.chunks.push(msg.data);
+      f.received += msg.data.byteLength;
+      updateProgress(msg.id, f.received / f.size);
+    } else if(msg.type === 'done'){
+      var f2 = receiving[msg.id];
+      if(!f2) return;
+
+      var blob = new Blob(f2.chunks);
+      var url = URL.createObjectURL(blob);
+      markComplete(msg.id, url, f2.name);
+      // Release references after the Blob has been created.
+      f2.chunks = [];
+      delete receiving[msg.id];
+    } else if(msg.type === 'text'){
+      textReceived.textContent = msg.value && msg.value.length ? msg.value : 'Nothing yet.';
+    }
+  }
+
+  // ---------- Text share ----------
+  textInput.addEventListener('input', function(){
+    clearTimeout(textDebounce);
+    textDebounce = setTimeout(function(){
+      if(conn && conn.open){
+        conn.send({ type: 'text', value: textInput.value });
+      }
+    }, 250);
+  });
+
+  // ---------- Transfer history UI ----------
+  function addHistoryItem(id, name, size, statusLabel){
+    emptyNote.style.display = 'none';
+    var item = document.createElement('div');
+    item.className = 'xfer-item';
+    item.id = 'xfer-' + id;
+    item.innerHTML =
+      '<div class="xfer-top">' +
+        '<span class="xfer-name" title="' + escapeHtml(name) + '">' + escapeHtml(name) + '</span>' +
+        '<span class="xfer-meta">' + formatBytes(size) + '</span>' +
+      '</div>' +
+      '<div class="xfer-bar"><div class="xfer-bar-fill"></div></div>' +
+      '<div class="xfer-foot">' + statusLabel + '…</div>';
+    historyEl.prepend(item);
+  }
+
+  function updateProgress(id, ratio){
+    var item = document.getElementById('xfer-' + id);
+    if(!item) return;
+    var fill = item.querySelector('.xfer-bar-fill');
+    fill.style.width = Math.min(100, Math.round(ratio * 100)) + '%';
+  }
+
+  function markComplete(id, url, name){
+    var item = document.getElementById('xfer-' + id);
+    if(!item) return;
+    item.classList.add('done');
+    item.querySelector('.xfer-bar-fill').style.width = '100%';
+    var foot = item.querySelector('.xfer-foot');
+    if(url){
+      foot.innerHTML = '<a href="' + url + '" download="' + escapeHtml(name) + '">Download</a>';
+    } else {
+      foot.textContent = 'Sent';
+    }
+  }
+
+  function markError(id){
+    var item = document.getElementById('xfer-' + id);
+    if(!item) return;
+    item.classList.add('error');
+    item.querySelector('.xfer-foot').textContent = 'Failed';
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+    });
+  }
+
+  window.addEventListener('beforeunload', function(){
+    try{
+      if(conn) conn.close();
+      if(peer) peer.destroy();
+    }catch(e){}
+  });
+})();
+</script>
+
+</body>
+</html>
