@@ -305,6 +305,7 @@
         <div class="node-id pending" id="myId">connecting…</div>
         <div class="node-row">
           <button class="btn" id="copyIdBtn">Copy ID</button>
+          <button class="btn" id="soundToggleBtn" title="Play a sound on connect" aria-pressed="true">🔔 Sound on</button>
         </div>
       </div>
 
@@ -457,6 +458,7 @@
   var myIdEl = document.getElementById('myId');
   var statusPill = document.getElementById('statusPill');
   var copyIdBtn = document.getElementById('copyIdBtn');
+  var soundToggleBtn = document.getElementById('soundToggleBtn');
   var partnerInput = document.getElementById('partnerInput');
   var connectBtn = document.getElementById('connectBtn');
   var disconnectBtn = document.getElementById('disconnectBtn');
@@ -473,6 +475,67 @@
   var myId = null;
   var receiving = {}; // id -> transfer state
   var textDebounce = null;
+
+  // ---------- Connect sound ----------
+  // Generated with the Web Audio API so no external audio file is needed.
+  // AudioContext must be created/resumed from a user gesture on most
+  // browsers (notably iOS Safari), so we lazily create it on the first
+  // click anywhere in the panel rather than at page load.
+  var soundEnabled = true;
+  try{
+    var storedSound = localStorage.getItem('wireline-sound');
+    if(storedSound !== null) soundEnabled = storedSound === '1';
+  }catch(e){}
+
+  var audioCtx = null;
+  function ensureAudioCtx(){
+    if(audioCtx) return audioCtx;
+    try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e){ audioCtx = null; }
+    return audioCtx;
+  }
+  function primeAudioCtx(){
+    var ctx = ensureAudioCtx();
+    if(ctx && ctx.state === 'suspended'){ ctx.resume().catch(function(){}); }
+  }
+  // Any click in the link panel counts as the user gesture needed to
+  // unlock audio, so the chime is ready by the time a connection lands.
+  linkPanel.addEventListener('click', primeAudioCtx, { once: true });
+
+  function playTone(ctx, freq, start, dur){
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.22, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(start);
+    osc.stop(start + dur + 0.03);
+  }
+  function playConnectSound(){
+    if(!soundEnabled) return;
+    var ctx = ensureAudioCtx();
+    if(!ctx) return;
+    if(ctx.state === 'suspended'){ ctx.resume().catch(function(){}); }
+    var now = ctx.currentTime;
+    playTone(ctx, 587.33, now, 0.09);        // D5
+    playTone(ctx, 880.00, now + 0.09, 0.18);  // A5
+  }
+
+  function updateSoundToggleUI(){
+    soundToggleBtn.textContent = soundEnabled ? '🔔 Sound on' : '🔕 Sound off';
+    soundToggleBtn.setAttribute('aria-pressed', String(soundEnabled));
+  }
+  updateSoundToggleUI();
+  soundToggleBtn.addEventListener('click', function(){
+    soundEnabled = !soundEnabled;
+    try{ localStorage.setItem('wireline-sound', soundEnabled ? '1' : '0'); }catch(e){}
+    updateSoundToggleUI();
+    if(soundEnabled) playConnectSound(); // quick confirmation chime
+  });
 
   function createReceiverState(msg){
     var state = {
@@ -543,6 +606,7 @@
   var RTC_CONFIG = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:global.stun.twilio.com:3478' },
       {
         urls: 'turn:openrelay.metered.ca:80',
@@ -561,6 +625,16 @@
       },
       {
         urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+        username: 'openrelayproject',
+        credential: 'openrelayproject'
+      },
+      {
+        // TURN-over-TLS on 443: some networks (hotel/office wifi, some
+        // carriers) allow only outbound HTTPS-looking traffic and block
+        // plain TURN, even on port 443. This variant rides on TLS so it
+        // gets through those networks too — it's the main reason a
+        // connection can succeed on one network and silently fail on another.
+        urls: 'turns:openrelay.metered.ca:443?transport=tcp',
         username: 'openrelayproject',
         credential: 'openrelayproject'
       }
@@ -749,12 +823,23 @@
       try{ conn.close(); }catch(e){}
     }
 
-    var label = connectAttempt > 1
-      ? 'Connecting… (attempt ' + connectAttempt + ' of ' + MAX_CONNECT_ATTEMPTS + ')'
-      : 'Connecting…';
+    var isFinalAttempt = connectAttempt >= MAX_CONNECT_ATTEMPTS;
+    var label = isFinalAttempt
+      ? 'Connecting… (final attempt — forcing relay route)'
+      : connectAttempt > 1
+        ? 'Connecting… (attempt ' + connectAttempt + ' of ' + MAX_CONNECT_ATTEMPTS + ')'
+        : 'Connecting…';
     setState('connecting', label);
 
-    var thisConn = peer.connect(pid, { reliable: true });
+    // Identical retries rarely fix a NAT-traversal failure. On the last
+    // attempt, force the connection through the TURN relay only, instead of
+    // letting ICE try (and possibly get stuck on) a direct path again.
+    var connectOptions = { reliable: true };
+    if(isFinalAttempt){
+      connectOptions.config = Object.assign({}, RTC_CONFIG, { iceTransportPolicy: 'relay' });
+    }
+
+    var thisConn = peer.connect(pid, connectOptions);
     conn = thisConn;
     bindConnection(thisConn);
 
@@ -832,6 +917,7 @@
       clearTimeout(connectTimer);
       activeConnectId = null;
       setState('connected', c.peer);
+      playConnectSound();
     });
     c.on('data', handleData);
     c.on('close', function(){
