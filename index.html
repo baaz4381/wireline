@@ -324,6 +324,7 @@
         <div class="node-row">
           <button class="btn primary" id="connectBtn">Connect</button>
           <button class="btn" id="disconnectBtn" style="display:none;">Disconnect</button>
+          <button class="btn" id="reconnectBtn" style="display:none;">Reconnect</button>
         </div>
       </div>
     </div>
@@ -464,6 +465,7 @@
   var partnerInput = document.getElementById('partnerInput');
   var connectBtn = document.getElementById('connectBtn');
   var disconnectBtn = document.getElementById('disconnectBtn');
+  var reconnectBtn = document.getElementById('reconnectBtn');
   var qrbox = document.getElementById('qrbox');
   var dropzone = document.getElementById('dropzone');
   var fileInput = document.getElementById('fileInput');
@@ -478,6 +480,25 @@
   var receiving = {}; // id -> transfer state
   var activeSends = {}; // id -> { cancel: fn } for in-progress outgoing sends
   var textDebounce = null;
+  var joinedViaQR = false; // set when this page load came from a scanned QR / join link
+
+  // ---------- Reconnect to last device ----------
+  var lastPeerId = null;
+  try{ lastPeerId = localStorage.getItem('wireline-last-peer'); }catch(e){}
+
+  function updateReconnectUI(){
+    if(!reconnectBtn) return;
+    var eligible = lastPeerId && lastPeerId !== myId;
+    reconnectBtn.style.display = eligible ? 'inline-block' : 'none';
+    if(eligible) reconnectBtn.textContent = 'Reconnect to ' + lastPeerId;
+  }
+
+  reconnectBtn.addEventListener('click', function(){
+    if(!lastPeerId || !peer) return;
+    joinedViaQR = false;
+    partnerInput.value = lastPeerId;
+    startConnect(lastPeerId);
+  });
 
   // ---------- Connect sound ----------
   // Generated with the Web Audio API so no external audio file is needed.
@@ -565,11 +586,13 @@
       linkPanel.classList.add('state-connecting');
       statusPill.textContent = detail || 'Connecting…';
       connectBtn.disabled = true;
+      reconnectBtn.style.display = 'none';
     } else if(state === 'connected'){
       linkPanel.classList.add('state-connected');
       statusPill.textContent = 'Connected to ' + (detail || 'partner');
       connectBtn.style.display = 'none';
       disconnectBtn.style.display = 'inline-block';
+      reconnectBtn.style.display = 'none';
       partnerInput.disabled = true;
     } else if(state === 'ready'){
       statusPill.textContent = 'Ready — waiting for a partner';
@@ -577,12 +600,14 @@
       connectBtn.style.display = 'inline-block';
       disconnectBtn.style.display = 'none';
       partnerInput.disabled = false;
+      updateReconnectUI();
     } else if(state === 'error'){
       statusPill.textContent = detail || 'Connection failed';
       connectBtn.disabled = false;
       disconnectBtn.style.display = 'none';
       connectBtn.style.display = 'inline-block';
       partnerInput.disabled = false;
+      updateReconnectUI();
     } else {
       statusPill.textContent = 'Establishing signal';
     }
@@ -785,13 +810,24 @@
   function handleJoinHash(){
     var hash = window.location.hash || '';
     if(hash.indexOf('#connect=') !== 0) return;
-    var id = decodeURIComponent(hash.slice('#connect='.length)).toUpperCase();
+    var id = decodeURIComponent(hash.slice('#connect='.length)).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
     if(!id) return;
     partnerInput.value = id;
     try{
       history.replaceState(null, '', window.location.pathname + window.location.search);
     }catch(e){}
     setState('ready');
+
+    if(id.length !== 6) return; // malformed link — let the user connect manually
+
+    joinedViaQR = true;
+    if(myId){
+      if(id !== myId) startConnect(id);
+    } else {
+      // Our own peer isn't open yet — queue it the same way a broker
+      // reconnect resumes a pending connect once the 'open' event fires.
+      pendingConnectId = id;
+    }
   }
 
   handleJoinHash();
@@ -868,6 +904,7 @@
   }
 
   connectBtn.addEventListener('click', function(){
+    joinedViaQR = false;
     var pid = partnerInput.value.trim().toUpperCase();
     if(!pid || pid.length !== 6 || !peer) return;
     if(myId && pid === myId){
@@ -921,6 +958,13 @@
       activeConnectId = null;
       setState('connected', c.peer);
       playConnectSound();
+      lastPeerId = c.peer;
+      try{ localStorage.setItem('wireline-last-peer', c.peer); }catch(e){}
+      if(joinedViaQR){
+        joinedViaQR = false;
+        var transferSection = document.getElementById('transfer');
+        if(transferSection) transferSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     });
     c.on('data', handleData);
     c.on('close', function(){
