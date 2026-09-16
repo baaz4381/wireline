@@ -223,9 +223,11 @@
   .xfer-bar-fill{height:100%;width:0%;background:var(--amber);transition:width .12s linear;}
   .xfer-item.done .xfer-bar-fill{background:var(--green);}
   .xfer-item.error .xfer-bar-fill{background:var(--red);}
-  .xfer-foot{margin-top:8px;font-size:12px;color:var(--text-faint);}
+  .xfer-foot{margin-top:8px;font-size:12px;color:var(--text-faint);display:flex;align-items:center;justify-content:space-between;gap:10px;}
   .xfer-foot a{color:var(--green);text-decoration:none;font-weight:600;}
   .xfer-foot a:hover{text-decoration:underline;}
+  .xfer-cancel{background:none;border:none;padding:0;color:var(--text-faint);font-size:12px;font-family:var(--sans);text-decoration:underline;cursor:pointer;flex:none;}
+  .xfer-cancel:hover{color:var(--red);}
   .empty-note{color:var(--text-faint);font-size:13px;margin-top:16px;}
 
   textarea{
@@ -284,8 +286,8 @@
       Wireline
     </div>
     <nav class="links">
-      <a href="#how">How it works</a>
       <a href="#transfer">Transfer</a>
+      <a href="#how">How it works</a>
       <a href="#features">Features</a>
       <a href="#faq">FAQ</a>
     </nav>
@@ -332,28 +334,6 @@
     </div>
   </section>
 
-  <section class="steps" id="how">
-    <h2>How to connect</h2>
-    <p class="section-sub">Three steps, no accounts on either end.</p>
-    <div class="step-grid">
-      <div class="step">
-        <div class="step-num">01</div>
-        <h3>Open on both devices</h3>
-        <p>Load this page on your phone and your computer, or on two of anyone's devices.</p>
-      </div>
-      <div class="step">
-        <div class="step-num">02</div>
-        <h3>Share your ID</h3>
-        <p>One device scans the other's QR code, or types in the ID manually.</p>
-      </div>
-      <div class="step">
-        <div class="step-num">03</div>
-        <h3>Drop files or type</h3>
-        <p>Once connected, drag files in or share text — it travels directly between the two.</p>
-      </div>
-    </div>
-  </section>
-
   <section class="transfer" id="transfer">
     <h2>Transfer</h2>
     <p class="section-sub">Available once your devices are connected.</p>
@@ -377,6 +357,28 @@
           <div class="node-label">Received</div>
           <div class="text-received-box" id="textReceived">Nothing yet.</div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="steps" id="how">
+    <h2>How to connect</h2>
+    <p class="section-sub">Three steps, no accounts on either end.</p>
+    <div class="step-grid">
+      <div class="step">
+        <div class="step-num">01</div>
+        <h3>Open on both devices</h3>
+        <p>Load this page on your phone and your computer, or on two of anyone's devices.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">02</div>
+        <h3>Share your ID</h3>
+        <p>One device scans the other's QR code, or types in the ID manually.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">03</div>
+        <h3>Drop files or type</h3>
+        <p>Once connected, drag files in or share text — it travels directly between the two.</p>
       </div>
     </div>
   </section>
@@ -474,6 +476,7 @@
   var conn = null;
   var myId = null;
   var receiving = {}; // id -> transfer state
+  var activeSends = {}; // id -> { cancel: fn } for in-progress outgoing sends
   var textDebounce = null;
 
   // ---------- Connect sound ----------
@@ -974,15 +977,20 @@
     var id = 's-' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
     addHistoryItem(id, file.name, file.size, 'Sending');
 
+    var cancelled = false;
+    activeSends[id] = { cancel: function(){ cancelled = true; } };
+
     try{
       activeConn.send({ type: 'meta', id: id, name: file.name, size: file.size });
     }catch(e){
+      delete activeSends[id];
       markError(id);
       return;
     }
 
     if(file.size === 0){
       try{ activeConn.send({ type: 'done', id: id }); }catch(e){}
+      delete activeSends[id];
       markComplete(id);
       return;
     }
@@ -992,7 +1000,9 @@
     var reader = new FileReader();
 
     reader.onload = function(e){
+      if(cancelled) return;
       if(!activeConn.open){
+        delete activeSends[id];
         markError(id);
         return;
       }
@@ -1000,7 +1010,9 @@
       var buf = e.target.result;
 
       function proceed(){
+        if(cancelled) return;
         if(!activeConn.open){
+          delete activeSends[id];
           markError(id);
           return;
         }
@@ -1008,6 +1020,7 @@
         try{
           activeConn.send({ type: 'chunk', id: id, data: buf });
         }catch(err){
+          delete activeSends[id];
           markError(id);
           return;
         }
@@ -1019,6 +1032,7 @@
           readSlice(offset);
         }else{
           try{ activeConn.send({ type: 'done', id: id }); }catch(err){}
+          delete activeSends[id];
           markComplete(id);
         }
       }
@@ -1026,8 +1040,13 @@
       var dc = activeConn.dataChannel;
       if(dc && dc.bufferedAmount > 4 * 1024 * 1024){
         var wait = setInterval(function(){
+          if(cancelled){
+            clearInterval(wait);
+            return;
+          }
           if(!activeConn.open){
             clearInterval(wait);
+            delete activeSends[id];
             markError(id);
           }else if(!dc || dc.bufferedAmount < 1 * 1024 * 1024){
             clearInterval(wait);
@@ -1039,11 +1058,13 @@
       }
     };
 
-    reader.onerror = function(){ markError(id); };
-    reader.onabort = function(){ markError(id); };
+    reader.onerror = function(){ delete activeSends[id]; markError(id); };
+    reader.onabort = function(){ delete activeSends[id]; markError(id); };
 
     function readSlice(o){
+      if(cancelled) return;
       if(!activeConn.open){
+        delete activeSends[id];
         markError(id);
         return;
       }
@@ -1081,7 +1102,42 @@
       delete receiving[msg.id];
     } else if(msg.type === 'text'){
       textReceived.textContent = msg.value && msg.value.length ? msg.value : 'Nothing yet.';
+    } else if(msg.type === 'cancel'){
+      // The other side cancelled: if we were sending this file, stop; if we
+      // were receiving it, drop what we have. Either way, reflect it in the UI.
+      if(activeSends[msg.id]){
+        activeSends[msg.id].cancel();
+        delete activeSends[msg.id];
+        markCancelled(msg.id);
+      }
+      if(receiving[msg.id]){
+        delete receiving[msg.id];
+        markCancelled(msg.id);
+      }
     }
+  }
+
+  function cancelTransfer(id){
+    var wasActive = !!activeSends[id] || !!receiving[id];
+    if(activeSends[id]){
+      activeSends[id].cancel();
+      delete activeSends[id];
+    }
+    if(receiving[id]){
+      delete receiving[id];
+    }
+    if(conn && conn.open){
+      try{ conn.send({ type: 'cancel', id: id }); }catch(e){}
+    }
+    if(wasActive) markCancelled(id);
+  }
+
+  function markCancelled(id){
+    var item = document.getElementById('xfer-' + id);
+    if(!item) return;
+    item.classList.add('error');
+    var foot = item.querySelector('.xfer-foot');
+    if(foot) foot.textContent = 'Cancelled';
   }
 
   // ---------- Text share ----------
@@ -1106,9 +1162,16 @@
         '<span class="xfer-meta">' + formatBytes(size) + '</span>' +
       '</div>' +
       '<div class="xfer-bar"><div class="xfer-bar-fill"></div></div>' +
-      '<div class="xfer-foot">' + statusLabel + '…</div>';
+      '<div class="xfer-foot"><span>' + statusLabel + '…</span>' +
+      '<button type="button" class="xfer-cancel" data-id="' + id + '">Cancel</button></div>';
     historyEl.prepend(item);
   }
+
+  historyEl.addEventListener('click', function(e){
+    var btn = e.target.closest && e.target.closest('.xfer-cancel');
+    if(!btn) return;
+    cancelTransfer(btn.getAttribute('data-id'));
+  });
 
   function updateProgress(id, ratio){
     var item = document.getElementById('xfer-' + id);
